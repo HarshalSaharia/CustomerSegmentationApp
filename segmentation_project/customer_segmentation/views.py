@@ -17,18 +17,31 @@ def upload_data(request):
             data = pd.read_csv(csv_file)
             # Save each row to CustomerData model
             for _, row in data.iterrows():
-                CustomerData.objects.create(
-                    customer_id=row['CustomerID'],
-                    gender=row['Gender'],
-                    age=row['Age'],
-                    annual_income=row['Annual Income (k$)'],
-                    spending_score=row['Spending Score (1-100)']
+                customer_id = row['CustomerID']
+                # Check if the customer already exists
+                customer, created = CustomerData.objects.get_or_create(
+                    customer_id=customer_id,
+                    defaults={
+                        'gender': row['Gender'],
+                        'age': row['Age'],
+                        'annual_income': row['Annual Income (k$)'],
+                        'spending_score': row['Spending Score (1-100)']
+                    }
                 )
+                # If the customer was not created, you can decide to update or skip
+                if not created:
+                    # Optionally update existing record
+                    customer.gender = row['Gender']
+                    customer.age = row['Age']
+                    customer.annual_income = row['Annual Income (k$)']
+                    customer.spending_score = row['Spending Score (1-100)']
+                    customer.save()
             # Redirect to dashboard after upload
             return redirect('segment')
     else:
         form = CSVUploadForm()
     return render(request, 'customer_segmentation/upload.html', {'form': form})
+
 
 # View for customer segmentation dashboard
 def segment_customers(request):
