@@ -5,7 +5,6 @@ from .clustering import kmeans_clustering
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import json
 
 # View for uploading data
 def upload_data(request):
@@ -13,12 +12,13 @@ def upload_data(request):
         form = CSVUploadForm(request.POST, request.FILES)
         if form.is_valid():
             csv_file = form.cleaned_data['file']
-            # Read CSV using Pandas
             data = pd.read_csv(csv_file)
-            # Save each row to CustomerData model
+            if data['CustomerID'].duplicated().any():
+                form.add_error('file', 'The uploaded CSV contains duplicate CustomerIDs.')
+                return render(request, 'customer_segmentation/upload.html', {'form': form})
+                
             for _, row in data.iterrows():
                 customer_id = row['CustomerID']
-                # Check if the customer already exists
                 customer, created = CustomerData.objects.get_or_create(
                     customer_id=customer_id,
                     defaults={
@@ -28,63 +28,77 @@ def upload_data(request):
                         'spending_score': row['Spending Score (1-100)']
                     }
                 )
-                # If the customer was not created, you can decide to update or skip
                 if not created:
-                    # Optionally update existing record
                     customer.gender = row['Gender']
                     customer.age = row['Age']
                     customer.annual_income = row['Annual Income (k$)']
                     customer.spending_score = row['Spending Score (1-100)']
                     customer.save()
-            # Redirect to dashboard after upload
+            
+            # Perform clustering after saving CustomerData
+            kmeans_clustering(n_clusters=5)
+
+            # Check number of clusters created
+            cluster_count = ClusterResult.objects.count()
+            print(f"Number of clusters created: {cluster_count}")
+
+            clusters = ClusterResult.objects.all()
+            print("Cluster results:")
+            for cluster in clusters:
+                print(cluster)
+
             return redirect('segment')
     else:
         form = CSVUploadForm()
     return render(request, 'customer_segmentation/upload.html', {'form': form})
 
 
+# Test function to validate the clustering
+def test():
+    # Simple test to ensure clustering results exist
+    clusters = ClusterResult.objects.all()
+    if clusters.exists():
+        print("Test passed: Clusters exist.")
+    else:
+        print("Test failed: No clusters found.")
+
+
+# View for customer segmentation dashboard
 # View for customer segmentation dashboard
 def segment_customers(request):
     # Get customer data and clusters
     customer_data = CustomerData.objects.all()
     clusters = ClusterResult.objects.all()
 
-    # Debugging output
-    print(f'Number of customers: {customer_data.count()}')
-    print(f'Number of clusters: {clusters.count()}')
+    # Prepare cluster assignments for each customer
+    customer_cluster_ids = [c.cluster_id for c in customer_data]  # Ensure CustomerData has cluster_id
 
-    # Prepare data for visualization
-    if not customer_data or not clusters:
-        return render(request, 'customer_segmentation/dashboard.html', {'error': 'No data available for segmentation.'})
-
-    # Prepare the data for Plotly
+    # Create the DataFrame with correct lengths
     data = np.array([(c.age, c.annual_income, c.spending_score) for c in customer_data])
-    cluster_ids = [cluster.cluster_id for cluster in clusters]
-
-    # Create a DataFrame for Plotly
     df = pd.DataFrame(data, columns=['Age', 'Annual Income', 'Spending Score'])
-    
-    # Ensure the lengths match
-    if len(cluster_ids) != len(df):
-        return render(request, 'customer_segmentation/dashboard.html', {'error': 'Cluster IDs do not match customer data.'})
+    df['Cluster'] = customer_cluster_ids  # Assigns a cluster ID for each customer
 
-    df['Cluster'] = cluster_ids
-
-    # Define a color palette
-    color_map = px.colors.qualitative.Plotly
-    fig = px.scatter_3d(df, x='Age', y='Annual Income', z='Spending Score', color='Cluster',
-                         color_continuous_scale=color_map)
-
-    # Convert plot to HTML
+    # Prepare Plotly figure
+    fig = px.scatter_3d(df, x='Age', y='Annual Income', z='Spending Score', color='Cluster', color_continuous_scale=px.colors.qualitative.Plotly)
     plot_html = fig.to_html(full_html=False)
 
     # Prepare average metrics for display
-    avg_metrics = {cluster.cluster_id: {'avg_income': cluster.avg_annual_income, 'avg_spending': cluster.avg_spending_score} for cluster in clusters}
+    avg_metrics = {
+        cluster.cluster_id: {
+            'avg_income': cluster.avg_annual_income,
+            'avg_spending': cluster.avg_spending_score,
+            'customer_count': cluster.customer_count,
+            'marketing_recommendation': cluster.marketing_recommendation
+        }
+        for cluster in clusters
+    }
 
-    # Prepare context for rendering
+    # Debugging output
+    print("avg_metrics dictionary passed to template:", avg_metrics)
+
     context = {
         'avg_metrics': avg_metrics,
         'plot_html': plot_html,
     }
-    
+
     return render(request, 'customer_segmentation/dashboard.html', context)
